@@ -1,10 +1,12 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token::{Token, TokenAccount};
 
 declare_id!("GUkh3LZRi1YrxCmJSrhRkj8rGKDxMKq1xJLWeMziHirj");
 
 #[program]
 pub mod solarpool {
     use anchor_lang::solana_program::system_instruction;
+    use anchor_spl::token::{self, Transfer};
 
     use super::*;
     pub fn transfer_lamports(ctx: Context<TransferLamports>, amount: u64) -> Result<()> {
@@ -28,6 +30,24 @@ pub mod solarpool {
 
         Ok(())
     }
+
+    pub fn transfer_spl_tokens(ctx: Context<TransferSpl>, amount: u64) -> Result<()> {
+        let authority = &ctx.accounts.from;
+        let source = &ctx.accounts.from_ata;
+        let destination = &ctx.accounts.to_ata;
+        let token_program = &ctx.accounts.token_program;
+
+        // Transfer tokens from taker to initializer
+        let cpi_accounts = Transfer {
+            from: source.to_account_info().clone(),
+            to: destination.to_account_info().clone(),
+            authority: authority.to_account_info().clone(),
+        };
+        let cpi_program = token_program.to_account_info();
+
+        token::transfer(CpiContext::new(cpi_program, cpi_accounts), amount)?;
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -38,4 +58,14 @@ pub struct TransferLamports<'info> {
     /// CHECK: The `to` is just a recipient account
     pub to: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct TransferSpl<'info> {
+    pub from: Signer<'info>,
+    #[account(mut)]
+    pub from_ata: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub to_ata: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
 }
