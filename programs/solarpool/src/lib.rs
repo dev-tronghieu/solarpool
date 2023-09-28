@@ -1,4 +1,5 @@
-use anchor_lang::prelude::*;
+mod helpers;
+use anchor_lang::prelude::{borsh::de, *};
 use anchor_spl::token::{Token, TokenAccount};
 
 declare_id!("GUkh3LZRi1YrxCmJSrhRkj8rGKDxMKq1xJLWeMziHirj");
@@ -51,19 +52,36 @@ pub mod solarpool {
 
     pub fn create_solarpool(
         ctx: Context<CreateSolarpool>,
+        mint_pool: Pubkey,
         mint_a: Pubkey,
         mint_b: Pubkey,
     ) -> Result<()> {
         let pool = &mut ctx.accounts.pool;
         pool.owner = *ctx.accounts.owner.key;
+        pool.mint_pool = mint_pool;
         pool.mint_a = mint_a;
         pool.mint_b = mint_b;
+        let ata_pool = &mut ctx.accounts.ata_pool;
         let ata_a = &mut ctx.accounts.ata_a;
         let ata_b = &mut ctx.accounts.ata_b;
+        pool.ata_pool = *ata_pool.to_account_info().key;
         pool.ata_a = *ata_a.to_account_info().key;
         pool.ata_b = *ata_b.to_account_info().key;
 
         println!("Solarpool created");
+
+        Ok(())
+    }
+
+    pub fn swap(ctx: Context<Swap>, amount: u64) -> Result<()> {
+        let pool = &mut ctx.accounts.pool;
+        let ata_source = &mut ctx.accounts.ata_source;
+        let ata_destination = &mut ctx.accounts.ata_destination;
+        let user = &ctx.accounts.user;
+        let token_program = &ctx.accounts.token_program;
+
+        let transfer_direction =
+            helpers::TransferDirection::new(&pool, &ata_source.mint, &ata_destination.mint);
 
         Ok(())
     }
@@ -92,35 +110,46 @@ pub struct TransferSpl<'info> {
 #[account]
 pub struct LiquidityPool {
     pub owner: Pubkey,
+    pub mint_pool: Pubkey,
     pub mint_a: Pubkey,
     pub mint_b: Pubkey,
+    pub ata_pool: Pubkey,
     pub ata_a: Pubkey,
     pub ata_b: Pubkey,
+}
+
+impl LiquidityPool {
+    pub fn get_size() -> usize {
+        32 + 32 + 32 + 32 + 32 + 32 + 32
+    }
 }
 
 #[derive(Accounts)]
 pub struct CreateSolarpool<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
-    /* space:
-    - 8 discriminator
-    - 32 owner
-    - 32 mint_a
-    - 32 mint_b
-    - 32 ata_a
-    - 32 ata_b
-    */
     #[account(
         init,
         payer = owner,
-        space = 8 + 32 + 32 + 32 + 32 + 32,
+        space = 8 + LiquidityPool::get_size(),
         seeds = [b"solarpool".as_ref(), owner.key().as_ref()],
         bump
     )]
     pub pool: Account<'info, LiquidityPool>,
-    #[account(mut)]
+    pub ata_pool: Account<'info, TokenAccount>,
     pub ata_a: Account<'info, TokenAccount>,
-    #[account(mut)]
     pub ata_b: Account<'info, TokenAccount>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Swap<'info> {
+    #[account(mut)]
+    pub pool: Account<'info, LiquidityPool>,
+    #[account(mut)]
+    pub ata_source: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub ata_destination: Account<'info, TokenAccount>,
+    pub user: Signer<'info>,
+    pub token_program: Program<'info, Token>,
 }
