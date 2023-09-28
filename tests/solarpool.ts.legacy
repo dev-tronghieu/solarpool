@@ -1,0 +1,107 @@
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import { Solarpool } from "../target/types/solarpool";
+import { assert } from "chai";
+import {
+    TOKEN_PROGRAM_ID,
+    createAssociatedTokenAccount,
+    createMint,
+    mintTo,
+} from "@solana/spl-token";
+
+describe("solarpool", async () => {
+    // Configure the client to use the local cluster.
+    anchor.setProvider(anchor.AnchorProvider.env());
+
+    const program = anchor.workspace.Solarpool as Program<Solarpool>;
+
+    const systemProgram = anchor.web3.SystemProgram.programId;
+
+    const fromPrivkey = Uint8Array.from([
+        4, 2, 166, 126, 90, 195, 29, 55, 156, 126, 154, 128, 225, 119, 55, 254,
+        166, 102, 162, 91, 239, 131, 134, 27, 31, 71, 162, 8, 88, 87, 206, 221,
+        133, 95, 225, 202, 233, 61, 166, 53, 236, 36, 135, 152, 95, 152, 207,
+        194, 248, 76, 210, 22, 164, 108, 93, 111, 241, 201, 67, 22, 158, 98,
+        214, 236,
+    ]);
+    const from = anchor.web3.Keypair.fromSecretKey(fromPrivkey);
+    console.log("--> Your wallet address", from.publicKey.toBase58());
+
+    const to = anchor.web3.Keypair.generate();
+    console.log("--> Recipient wallet address", to.publicKey.toBase58());
+
+    const createMintToken = async (
+        payer: anchor.web3.Keypair,
+        authority: anchor.web3.PublicKey
+    ) => {
+        const mint = await createMint(
+            program.provider.connection,
+            payer,
+            authority,
+            null,
+            0
+        );
+        return mint;
+    };
+
+    it("Create Solarpool", async () => {
+        // Get the PDA address
+        const [poolPDA, _] = anchor.web3.PublicKey.findProgramAddressSync(
+            [
+                anchor.utils.bytes.utf8.encode("solarpool"),
+                from.publicKey.toBuffer(),
+            ],
+            program.programId
+        );
+
+        console.log("--> Pool PDA", poolPDA.toBase58());
+
+        // Create two mint tokens
+        const mintAmount = 1000;
+
+        const mintTokenA = await createMintToken(from, from.publicKey);
+        const ataA = await createAssociatedTokenAccount(
+            program.provider.connection,
+            from,
+            mintTokenA,
+            poolPDA
+        );
+        console.log("--> ATA A", ataA.toBase58());
+        await mintTo(
+            program.provider.connection,
+            from,
+            mintTokenA,
+            ataA,
+            from.publicKey,
+            mintAmount
+        );
+
+        const mintTokenB = await createMintToken(from, from.publicKey);
+        const ataB = await createAssociatedTokenAccount(
+            program.provider.connection,
+            from,
+            mintTokenB,
+            poolPDA
+        );
+        await mintTo(
+            program.provider.connection,
+            from,
+            mintTokenB,
+            ataB,
+            from.publicKey,
+            mintAmount
+        );
+
+        // Create the solarpool
+        await program.methods
+            .createSolarpool(mintTokenA, mintTokenB)
+            .accounts({
+                owner: from.publicKey,
+                ataA: ataA,
+                pool: poolPDA,
+                systemProgram: systemProgram,
+            })
+            .signers([from])
+            .rpc();
+    });
+});

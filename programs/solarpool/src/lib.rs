@@ -48,6 +48,25 @@ pub mod solarpool {
         token::transfer(CpiContext::new(cpi_program, cpi_accounts), amount)?;
         Ok(())
     }
+
+    pub fn create_solarpool(
+        ctx: Context<CreateSolarpool>,
+        mint_a: Pubkey,
+        mint_b: Pubkey,
+    ) -> Result<()> {
+        let pool = &mut ctx.accounts.pool;
+        pool.owner = *ctx.accounts.owner.key;
+        pool.mint_a = mint_a;
+        pool.mint_b = mint_b;
+        let ata_a = &mut ctx.accounts.ata_a;
+        let ata_b = &mut ctx.accounts.ata_b;
+        pool.ata_a = *ata_a.to_account_info().key;
+        pool.ata_b = *ata_b.to_account_info().key;
+
+        println!("Solarpool created");
+
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -68,4 +87,40 @@ pub struct TransferSpl<'info> {
     #[account(mut)]
     pub to_ata: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
+}
+
+#[account]
+pub struct LiquidityPool {
+    pub owner: Pubkey,
+    pub mint_a: Pubkey,
+    pub mint_b: Pubkey,
+    pub ata_a: Pubkey,
+    pub ata_b: Pubkey,
+}
+
+#[derive(Accounts)]
+pub struct CreateSolarpool<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    /* space:
+    - 8 discriminator
+    - 32 owner
+    - 32 mint_a
+    - 32 mint_b
+    - 32 ata_a
+    - 32 ata_b
+    */
+    #[account(
+        init,
+        payer = owner,
+        space = 8 + 32 + 32 + 32 + 32 + 32,
+        seeds = [b"solarpool".as_ref(), owner.key().as_ref()],
+        bump
+    )]
+    pub pool: Account<'info, LiquidityPool>,
+    #[account(mut)]
+    pub ata_a: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub ata_b: Account<'info, TokenAccount>,
+    pub system_program: Program<'info, System>,
 }

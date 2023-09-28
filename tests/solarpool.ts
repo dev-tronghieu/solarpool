@@ -1,118 +1,147 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { Solarpool } from "../target/types/solarpool";
-import { assert } from "chai";
 import {
-    TOKEN_PROGRAM_ID,
-    createAssociatedTokenAccount,
+    Account,
     createMint,
+    getOrCreateAssociatedTokenAccount,
     mintTo,
 } from "@solana/spl-token";
+import { Solarpool } from "../target/types/solarpool";
 
 describe("solarpool", async () => {
     // Configure the client to use the local cluster.
-    anchor.setProvider(anchor.AnchorProvider.env());
+    const provider = anchor.AnchorProvider.env();
+    anchor.setProvider(provider);
 
     const program = anchor.workspace.Solarpool as Program<Solarpool>;
 
-    const systemProgram = anchor.web3.SystemProgram.programId;
+    let solarPDA: anchor.web3.PublicKey;
+    let bumpSeed: number;
+    let feeAccount: anchor.web3.PublicKey;
+    const SWAP_PROGRAM_OWNER_FEE_ADDRESS =
+        process.env.SWAP_PROGRAM_OWNER_FEE_ADDRESS;
+    let mintA: anchor.web3.PublicKey;
+    let mintB: anchor.web3.PublicKey;
+    let ataA: Account;
+    let ataB: Account;
 
-    const fromPrivkey = Uint8Array.from([
-        4, 2, 166, 126, 90, 195, 29, 55, 156, 126, 154, 128, 225, 119, 55, 254,
-        166, 102, 162, 91, 239, 131, 134, 27, 31, 71, 162, 8, 88, 87, 206, 221,
-        133, 95, 225, 202, 233, 61, 166, 53, 236, 36, 135, 152, 95, 152, 207,
-        194, 248, 76, 210, 22, 164, 108, 93, 111, 241, 201, 67, 22, 158, 98,
-        214, 236,
-    ]);
-    const from = anchor.web3.Keypair.fromSecretKey(fromPrivkey);
-    console.log("--> Your wallet address", from.publicKey.toBase58());
+    const ammOwner = anchor.web3.Keypair.generate();
+    const payer = anchor.web3.Keypair.generate();
+    const tokenOwner = anchor.web3.Keypair.generate();
 
-    const to = anchor.web3.Keypair.generate();
-    console.log("--> Recipient wallet address", to.publicKey.toBase58());
+    it("Create Solarpool", async () => {
+        // Setup
+        const latestBlockHash = await provider.connection.getLatestBlockhash();
 
-    // Create SPL token accounts for the two users
-    const createMintToken = async (
-        payer: anchor.web3.Keypair,
-        authority: anchor.web3.PublicKey
-    ) => {
-        const mint = await createMint(
-            program.provider.connection,
+        const sig = await provider.connection.requestAirdrop(
+            payer.publicKey,
+            5_000_000_000
+        );
+
+        await provider.connection.confirmTransaction(
+            {
+                signature: sig,
+                blockhash: latestBlockHash.blockhash,
+                lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
+            },
+            "singleGossip"
+        );
+
+        const sig2 = await provider.connection.requestAirdrop(
+            ammOwner.publicKey,
+            5_000_000_000
+        );
+
+        await provider.connection.confirmTransaction(
+            {
+                signature: sig2,
+                blockhash: latestBlockHash.blockhash,
+                lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
+            },
+            "singleGossip"
+        );
+
+        [solarPDA, bumpSeed] = anchor.web3.PublicKey.findProgramAddressSync(
+            [
+                anchor.utils.bytes.utf8.encode("solarpool"),
+                ammOwner.publicKey.toBuffer(),
+            ],
+            program.programId
+        );
+
+        // Create and mint tokens
+        mintA = await createMint(
+            provider.connection,
             payer,
-            authority,
+            tokenOwner.publicKey,
             null,
             0
         );
-        return mint;
-    };
-    const mintTokenA = await createMintToken(from, from.publicKey);
-    const fromAtaTokenA = await createAssociatedTokenAccount(
-        program.provider.connection,
-        from,
-        mintTokenA,
-        from.publicKey
-    );
-    const toAtaTokenA = await createAssociatedTokenAccount(
-        program.provider.connection,
-        to,
-        mintTokenA,
-        to.publicKey
-    );
 
-    it("Transfer SOL", async () => {
-        await program.methods
-            .transferLamports(new anchor.BN(anchor.web3.LAMPORTS_PER_SOL))
-            .accounts({
-                from: from.publicKey,
-                to: to.publicKey,
-                systemProgram: systemProgram,
-            })
-            .signers([from])
-            .rpc();
-
-        assert.equal(
-            await program.provider.connection.getBalance(to.publicKey),
-            anchor.web3.LAMPORTS_PER_SOL
+        ataA = await getOrCreateAssociatedTokenAccount(
+            provider.connection,
+            payer,
+            mintA,
+            solarPDA,
+            true
         );
-    });
 
-    it("Transfer SPL", async () => {
-        const mintAmount = 1000;
         await mintTo(
-            program.provider.connection,
-            from,
-            mintTokenA,
-            fromAtaTokenA,
-            from.publicKey,
-            mintAmount
+            provider.connection,
+            payer,
+            mintA,
+            ataA.address,
+            tokenOwner,
+            10
         );
 
-        const amountToTransfer = 100;
+        mintB = await createMint(
+            provider.connection,
+            payer,
+            tokenOwner.publicKey,
+            null,
+            0
+        );
 
+        ataB = await getOrCreateAssociatedTokenAccount(
+            provider.connection,
+            payer,
+            mintB,
+            solarPDA,
+            true
+        );
+
+        await mintTo(
+            provider.connection,
+            payer,
+            mintB,
+            ataB.address,
+            tokenOwner,
+            20
+        );
+
+        // Create Solarpool
         await program.methods
-            .transferSplTokens(new anchor.BN(amountToTransfer))
+            .createSolarpool(mintA, mintB)
             .accounts({
-                from: from.publicKey,
-                fromAta: fromAtaTokenA,
-                toAta: toAtaTokenA,
-                tokenProgram: TOKEN_PROGRAM_ID,
+                ataA: ataA.address,
+                ataB: ataB.address,
+                owner: ammOwner.publicKey,
+                pool: solarPDA,
+                systemProgram: anchor.web3.SystemProgram.programId,
             })
-            .signers([from])
+            .signers([ammOwner])
             .rpc();
 
-        const fromTokenABalance =
-            await program.provider.connection.getTokenAccountBalance(
-                fromAtaTokenA
-            );
-        const toTokenABalance =
-            await program.provider.connection.getTokenAccountBalance(
-                toAtaTokenA
-            );
-
-        assert.equal(
-            fromTokenABalance.value.uiAmount,
-            mintAmount - amountToTransfer
+        // Check Solarpool
+        const solarpool = await program.account.liquidityPool.fetch(solarPDA);
+        console.log(
+            "--> Token A Reserve: ",
+            await provider.connection.getTokenAccountBalance(solarpool.ataA)
         );
-
-        assert.equal(toTokenABalance.value.uiAmount, amountToTransfer);
+        console.log(
+            "--> Token B Reserve: ",
+            await provider.connection.getTokenAccountBalance(solarpool.ataB)
+        );
     });
 });
