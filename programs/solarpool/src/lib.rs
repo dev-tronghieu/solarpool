@@ -74,7 +74,9 @@ pub mod solarpool {
     }
 
     pub fn swap(ctx: Context<Swap>, amount: u64) -> Result<()> {
-        let pool = &mut ctx.accounts.pool;
+        let pool = &ctx.accounts.pool;
+        let pool_ata_source = &mut ctx.accounts.pool_ata_source;
+        let pool_ata_destination = &mut ctx.accounts.pool_ata_destination;
         let ata_source = &mut ctx.accounts.ata_source;
         let ata_destination = &mut ctx.accounts.ata_destination;
         let user = &ctx.accounts.user;
@@ -82,6 +84,15 @@ pub mod solarpool {
 
         let transfer_direction =
             helpers::TransferDirection::new(&pool, &ata_source.mint, &ata_destination.mint);
+
+        // TEST: transfer amount token source to pool ata
+        let cpi_accounts = Transfer {
+            from: ata_source.to_account_info().clone(),
+            to: pool_ata_source.to_account_info().clone(),
+            authority: user.to_account_info().clone(),
+        };
+        let cpi_program = token_program.to_account_info();
+        token::transfer(CpiContext::new(cpi_program, cpi_accounts), amount)?;
 
         Ok(())
     }
@@ -144,8 +155,11 @@ pub struct CreateSolarpool<'info> {
 
 #[derive(Accounts)]
 pub struct Swap<'info> {
-    #[account(mut)]
     pub pool: Account<'info, LiquidityPool>,
+    #[account(mut)]
+    pub pool_ata_source: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub pool_ata_destination: Account<'info, TokenAccount>,
     #[account(mut)]
     pub ata_source: Account<'info, TokenAccount>,
     #[account(mut)]

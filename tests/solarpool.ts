@@ -5,6 +5,7 @@ import {
     createMint,
     getOrCreateAssociatedTokenAccount,
     mintTo,
+    TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { Solarpool } from "../target/types/solarpool";
 
@@ -16,7 +17,6 @@ describe("solarpool", async () => {
     const program = anchor.workspace.Solarpool as Program<Solarpool>;
 
     let solarPDA: anchor.web3.PublicKey;
-    let bumpSeed: number;
     let mintPool: anchor.web3.PublicKey;
     let mintA: anchor.web3.PublicKey;
     let mintB: anchor.web3.PublicKey;
@@ -31,7 +31,6 @@ describe("solarpool", async () => {
     it("Create Solarpool", async () => {
         // Setup
         const latestBlockHash = await provider.connection.getLatestBlockhash();
-
         const sig = await provider.connection.requestAirdrop(
             payer.publicKey,
             5_000_000_000
@@ -60,13 +59,13 @@ describe("solarpool", async () => {
             "singleGossip"
         );
 
-        [solarPDA, bumpSeed] = anchor.web3.PublicKey.findProgramAddressSync(
+        solarPDA = anchor.web3.PublicKey.findProgramAddressSync(
             [
                 anchor.utils.bytes.utf8.encode("solarpool"),
                 ammOwner.publicKey.toBuffer(),
             ],
             program.programId
-        );
+        )[0];
 
         // Create and mint tokens
         mintPool = await createMint(
@@ -107,7 +106,7 @@ describe("solarpool", async () => {
             mintA,
             ataA.address,
             tokenOwner,
-            10
+            100
         );
 
         mintB = await createMint(
@@ -132,7 +131,7 @@ describe("solarpool", async () => {
             mintB,
             ataB.address,
             tokenOwner,
-            20
+            100
         );
 
         // Create Solarpool
@@ -148,7 +147,90 @@ describe("solarpool", async () => {
             })
             .signers([ammOwner])
             .rpc();
+
+        // Check
+        const solarpool = await program.account.liquidityPool.fetch(solarPDA);
+        console.log(
+            "--> Solarpool TokenA balance: ",
+            await program.provider.connection.getTokenAccountBalance(
+                solarpool.ataA
+            )
+        );
+        console.log(
+            "--> Solarpool TokenB balance: ",
+            await program.provider.connection.getTokenAccountBalance(
+                solarpool.ataB
+            )
+        );
     });
 
-    it("Swap", async () => {});
+    it("Swap", async () => {
+        // Setup
+        const user = anchor.web3.Keypair.generate();
+
+        const latestBlockHash = await provider.connection.getLatestBlockhash();
+
+        const sig = await provider.connection.requestAirdrop(
+            user.publicKey,
+            5_000_000_000
+        );
+
+        await provider.connection.confirmTransaction(
+            {
+                signature: sig,
+                blockhash: latestBlockHash.blockhash,
+                lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
+            },
+            "singleGossip"
+        );
+
+        const userAtaA = await getOrCreateAssociatedTokenAccount(
+            provider.connection,
+            payer,
+            mintA,
+            user.publicKey,
+            true
+        );
+
+        await mintTo(
+            provider.connection,
+            payer,
+            mintA,
+            userAtaA.address,
+            tokenOwner,
+            100
+        );
+
+        const userAtaB = await getOrCreateAssociatedTokenAccount(
+            provider.connection,
+            payer,
+            mintB,
+            user.publicKey,
+            true
+        );
+
+        // Swap
+        await program.methods
+            .swap(new anchor.BN(10))
+            .accounts({
+                pool: solarPDA,
+                poolAtaSource: ataA.address,
+                poolAtaDestination: ataB.address,
+                ataSource: userAtaA.address,
+                ataDestination: userAtaB.address,
+                user: user.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID,
+            })
+            .signers([user])
+            .rpc();
+
+        // Check
+        const solarpool = await program.account.liquidityPool.fetch(solarPDA);
+        console.log(
+            "--> Solarpool TokenA balance: ",
+            await program.provider.connection.getTokenAccountBalance(
+                solarpool.ataA
+            )
+        );
+    });
 });
