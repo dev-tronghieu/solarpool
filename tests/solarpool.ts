@@ -23,42 +23,79 @@ describe("solarpool", async () => {
     let mintB: anchor.web3.PublicKey;
     let ataPool: Account;
     let ataA: Account;
+    let amountAtaA: number;
     let ataB: Account;
+    let amountAtaB: number;
+    let feeAtaA: Account;
+    let feeAtaB: Account;
+    let userAtaA: Account;
+    let userAtaB: Account;
 
     const ammOwner = anchor.web3.Keypair.generate();
+    const feeAccount = anchor.web3.Keypair.generate();
+    const feeRate = 0.01;
     const payer = anchor.web3.Keypair.generate();
     const tokenOwner = anchor.web3.Keypair.generate();
+    const user = anchor.web3.Keypair.generate();
+
+    const getSOL = async (publicKey: anchor.web3.PublicKey) => {
+        return (
+            (await program.provider.connection.getBalance(publicKey)) /
+            anchor.web3.LAMPORTS_PER_SOL
+        );
+    };
 
     const getBalance = async (ata: anchor.web3.PublicKey) => {
         return (await program.provider.connection.getTokenAccountBalance(ata))
             .value.amount;
     };
 
-    it("Create Solarpool", async () => {
-        // Setup
+    const printTransaction = async (sig: string) => {
+        const tx = await provider.connection.getParsedTransaction(
+            sig,
+            "confirmed"
+        );
+        console.log(tx.transaction.message.accountKeys[0]);
+    };
+
+    it("Setup", async () => {
         const latestBlockHash = await provider.connection.getLatestBlockhash();
-        const sig = await provider.connection.requestAirdrop(
+        const airdropPayerSig = await provider.connection.requestAirdrop(
             payer.publicKey,
-            5_000_000_000
+            4_000_000_000
         );
 
         await provider.connection.confirmTransaction(
             {
-                signature: sig,
+                signature: airdropPayerSig,
                 blockhash: latestBlockHash.blockhash,
                 lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
             },
             "singleGossip"
         );
 
-        const sig2 = await provider.connection.requestAirdrop(
+        const airdropAmmOwnerSig = await provider.connection.requestAirdrop(
             ammOwner.publicKey,
-            5_000_000_000
+            3_000_000_000
         );
 
         await provider.connection.confirmTransaction(
             {
-                signature: sig2,
+                signature: airdropAmmOwnerSig,
+                blockhash: latestBlockHash.blockhash,
+                lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
+            },
+            "singleGossip"
+        );
+
+        const airdropUserSig = await provider.connection.requestAirdrop(
+            user.publicKey,
+            2_000_000_000
+        );
+
+        await provider.connection.confirmTransaction(
+            {
+                signature: airdropUserSig,
                 blockhash: latestBlockHash.blockhash,
                 lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
             },
@@ -73,7 +110,6 @@ describe("solarpool", async () => {
             program.programId
         );
 
-        // Create and mint tokens
         mintPool = await createMint(
             provider.connection,
             payer,
@@ -112,7 +148,7 @@ describe("solarpool", async () => {
             mintA,
             ataA.address,
             tokenOwner,
-            100
+            100_000
         );
 
         mintB = await createMint(
@@ -137,57 +173,10 @@ describe("solarpool", async () => {
             mintB,
             ataB.address,
             tokenOwner,
-            100
+            100_000
         );
 
-        // Create Solarpool
-        await program.methods
-            .createSolarpool(bump, mintPool, mintA, mintB)
-            .accounts({
-                ataPool: ataPool.address,
-                ataA: ataA.address,
-                ataB: ataB.address,
-                owner: ammOwner.publicKey,
-                pool: solarPDA,
-                systemProgram: anchor.web3.SystemProgram.programId,
-            })
-            .signers([ammOwner])
-            .rpc();
-
-        // Check
-        const solarpool = await program.account.liquidityPool.fetch(solarPDA);
-        console.log("--> Solarpool");
-        console.log(
-            "- TokenA balance (Solarpool): ",
-            await getBalance(solarpool.ataA)
-        );
-        console.log(
-            "- TokenB balance (Solarpool): ",
-            await getBalance(solarpool.ataB)
-        );
-    });
-
-    it("Swap", async () => {
-        // Setup
-        const user = anchor.web3.Keypair.generate();
-
-        const latestBlockHash = await provider.connection.getLatestBlockhash();
-
-        const sig = await provider.connection.requestAirdrop(
-            user.publicKey,
-            5_000_000_000
-        );
-
-        await provider.connection.confirmTransaction(
-            {
-                signature: sig,
-                blockhash: latestBlockHash.blockhash,
-                lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
-            },
-            "singleGossip"
-        );
-
-        const userAtaA = await getOrCreateAssociatedTokenAccount(
+        userAtaA = await getOrCreateAssociatedTokenAccount(
             provider.connection,
             payer,
             mintA,
@@ -201,10 +190,10 @@ describe("solarpool", async () => {
             mintA,
             userAtaA.address,
             tokenOwner,
-            100
+            1_000
         );
 
-        const userAtaB = await getOrCreateAssociatedTokenAccount(
+        userAtaB = await getOrCreateAssociatedTokenAccount(
             provider.connection,
             payer,
             mintB,
@@ -212,29 +201,113 @@ describe("solarpool", async () => {
             true
         );
 
+        await mintTo(
+            provider.connection,
+            payer,
+            mintB,
+            userAtaB.address,
+            tokenOwner,
+            2_000
+        );
+
+        feeAtaA = await getOrCreateAssociatedTokenAccount(
+            provider.connection,
+            payer,
+            mintA,
+            feeAccount.publicKey,
+            true
+        );
+
+        feeAtaB = await getOrCreateAssociatedTokenAccount(
+            provider.connection,
+            payer,
+            mintB,
+            feeAccount.publicKey,
+            true
+        );
+
+        console.log("--> Setup info");
+        console.log("- Payer: ", payer.publicKey.toBase58());
+        console.log("- ammOwner: ", ammOwner.publicKey.toBase58());
+        console.log("- TokenOwner: ", tokenOwner.publicKey.toBase58());
+        console.log("  + MintA: ", mintA.toBase58());
+        console.log("  + MintB: ", mintB.toBase58());
+        console.log("  + MintPool: ", mintPool.toBase58());
+        console.log("- Solarpool PDA: ", solarPDA.toBase58());
+        console.log("  + ATA A: ", ataA.address.toBase58());
+        console.log("  + ATA B: ", ataB.address.toBase58());
+        console.log("- User: ", user.publicKey.toBase58());
+        console.log("  + ATA A: ", userAtaA.address.toBase58());
+        console.log("  + ATA B: ", userAtaB.address.toBase58());
+        console.log("- feeAccount: ", feeAccount.publicKey.toBase58());
+        console.log("  + ATA A: ", feeAtaA.address.toBase58());
+        console.log("  + ATA B: ", feeAtaB.address.toBase58());
+    });
+
+    it("Create Solarpool", async () => {
+        console.log();
+        await program.methods
+            .createSolarpool(bump, feeRate, mintPool, mintA, mintB)
+            .accounts({
+                owner: ammOwner.publicKey,
+                feeAccount: feeAccount.publicKey,
+                pool: solarPDA,
+                ataPool: ataPool.address,
+                ataA: ataA.address,
+                ataB: ataB.address,
+                systemProgram: anchor.web3.SystemProgram.programId,
+            })
+            .signers([ammOwner])
+            .rpc();
+
+        // Check
+        const solarpool = await program.account.liquidityPool.fetch(solarPDA);
+        console.log("--> Solarpool");
+        console.log("- SOL (Solarpool): ", await getSOL(solarPDA));
+        console.log(
+            "- TokenA balance (Solarpool): ",
+            await getBalance(solarpool.ataA)
+        );
+        console.log(
+            "- TokenB balance (Solarpool): ",
+            await getBalance(solarpool.ataB)
+        );
+        console.log("- Fee rate: ", solarpool.feeRate);
+    });
+
+    it("Swap", async () => {
+        console.log();
         console.log("--> Before swap");
+        amountAtaA = parseInt(await getBalance(ataA.address));
+        amountAtaB = parseInt(await getBalance(ataB.address));
         console.log(
-            "- Solarpool TokenA balance: ",
-            await getBalance(ataA.address)
+            `- Exchange rate: 1 TokenA = ${amountAtaA / amountAtaB} TokenB`
         );
+        console.log("- SOL (Solarpool): ", await getSOL(solarPDA));
+        console.log("- TokenA balance (Solarpool): ", amountAtaA);
+        console.log("- TokenB balance (Solarpool): ", amountAtaB);
+        console.log("- SOL (User): ", await getSOL(user.publicKey));
         console.log(
-            "- Solarpool TokenB balance: ",
-            await getBalance(ataB.address)
-        );
-        console.log(
-            "- User TokenA balance: ",
+            "- TokenA balance (User): ",
             await getBalance(userAtaA.address)
         );
         console.log(
-            "- User TokenB balance: ",
+            "- TokenB balance (User): ",
             await getBalance(userAtaB.address)
         );
+        console.log(
+            "- TokenA balance (Fee): ",
+            await getBalance(feeAtaA.address)
+        );
 
-        // Swap
-        await program.methods
-            .swap(new anchor.BN(10))
+        // Swap 800 TokenA for TokenB
+        const swap_amount = 800;
+
+        const swap1Sig = await program.methods
+            .swap(new anchor.BN(swap_amount))
             .accounts({
                 pool: solarPDA,
+                feeAtaSource: feeAtaA.address,
                 poolAtaSource: ataA.address,
                 poolAtaDestination: ataB.address,
                 ataSource: userAtaA.address,
@@ -245,18 +318,19 @@ describe("solarpool", async () => {
             .signers([user])
             .rpc();
 
-        // Check
-        const solarpool = await program.account.liquidityPool.fetch(solarPDA);
-
-        console.log("--> After swap");
+        // Check results of swapping 800 TokenA for TokenB
+        console.log();
+        printTransaction(swap1Sig);
+        console.log(`--> After swap ${swap_amount} tokenA for tokenB`);
+        amountAtaA = parseInt(await getBalance(ataA.address));
+        amountAtaB = parseInt(await getBalance(ataB.address));
         console.log(
-            "- TokenA balance (Solarpool): ",
-            await getBalance(solarpool.ataA)
+            `- Exchange rate: 1 TokenA = ${amountAtaA / amountAtaB} TokenB`
         );
-        console.log(
-            "- TokenB balance (Solarpool): ",
-            await getBalance(solarpool.ataB)
-        );
+        console.log("- SOL (Solarpool): ", await getSOL(solarPDA));
+        console.log("- TokenA balance (Solarpool): ", amountAtaA);
+        console.log("- TokenB balance (Solarpool): ", amountAtaB);
+        console.log("- SOL (User): ", await getSOL(user.publicKey));
         console.log(
             "- TokenA balance (User): ",
             await getBalance(userAtaA.address)
@@ -264,6 +338,62 @@ describe("solarpool", async () => {
         console.log(
             "- TokenB balance (User): ",
             await getBalance(userAtaB.address)
+        );
+        console.log(
+            "- TokenA balance (Fee): ",
+            await getBalance(feeAtaA.address)
+        );
+        console.log(
+            "- TokenB balance (Fee): ",
+            await getBalance(feeAtaB.address)
+        );
+
+        // Swap 2000 TokenB for TokenA
+        const swap_amount2 = 2000;
+
+        const swap2Sig = await program.methods
+            .swap(new anchor.BN(swap_amount2))
+            .accounts({
+                pool: solarPDA,
+                feeAtaSource: feeAtaB.address,
+                poolAtaSource: ataB.address,
+                poolAtaDestination: ataA.address,
+                ataSource: userAtaB.address,
+                ataDestination: userAtaA.address,
+                user: user.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID,
+            })
+            .signers([user])
+            .rpc();
+
+        // Check results of swapping 2000 TokenB for TokenA
+        console.log();
+        printTransaction(swap2Sig);
+        console.log(`--> After swap ${swap_amount2} tokenB for tokenA`);
+        amountAtaA = parseInt(await getBalance(ataA.address));
+        amountAtaB = parseInt(await getBalance(ataB.address));
+        console.log(
+            `- Exchange rate: 1 TokenA = ${amountAtaA / amountAtaB} TokenB`
+        );
+        console.log("- SOL (Solarpool): ", await getSOL(solarPDA));
+        console.log("- TokenA balance (Solarpool): ", amountAtaA);
+        console.log("- TokenB balance (Solarpool): ", amountAtaB);
+        console.log("- SOL (User): ", await getSOL(user.publicKey));
+        console.log(
+            "- TokenA balance (User): ",
+            await getBalance(userAtaA.address)
+        );
+        console.log(
+            "- TokenB balance (User): ",
+            await getBalance(userAtaB.address)
+        );
+        console.log(
+            "- TokenA balance (Fee): ",
+            await getBalance(feeAtaA.address)
+        );
+        console.log(
+            "- TokenB balance (Fee): ",
+            await getBalance(feeAtaB.address)
         );
     });
 });
