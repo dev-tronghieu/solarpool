@@ -52,11 +52,13 @@ pub mod solarpool {
 
     pub fn create_solarpool(
         ctx: Context<CreateSolarpool>,
+        bump: u8,
         mint_pool: Pubkey,
         mint_a: Pubkey,
         mint_b: Pubkey,
     ) -> Result<()> {
         let pool = &mut ctx.accounts.pool;
+        pool.bump = bump;
         pool.owner = *ctx.accounts.owner.key;
         pool.mint_pool = mint_pool;
         pool.mint_a = mint_a;
@@ -85,7 +87,7 @@ pub mod solarpool {
         let transfer_direction =
             helpers::TransferDirection::new(&pool, &ata_source.mint, &ata_destination.mint);
 
-        // TEST: transfer amount token source to pool ata
+        // TEST: transfer amount token source from user source to pool ata
         let cpi_accounts = Transfer {
             from: ata_source.to_account_info().clone(),
             to: pool_ata_source.to_account_info().clone(),
@@ -93,6 +95,22 @@ pub mod solarpool {
         };
         let cpi_program = token_program.to_account_info();
         token::transfer(CpiContext::new(cpi_program, cpi_accounts), amount)?;
+
+        // TEST: transfer amount token from pool ata to user destination
+        let cpi_accounts = Transfer {
+            from: pool_ata_destination.to_account_info().clone(),
+            to: ata_destination.to_account_info().clone(),
+            authority: pool.to_account_info().clone(),
+        };
+        let cpi_program = token_program.to_account_info();
+        token::transfer(
+            CpiContext::new_with_signer(
+                cpi_program,
+                cpi_accounts,
+                &[&[&b"solarpool"[..], &pool.owner.to_bytes(), &[pool.bump]]],
+            ),
+            amount,
+        )?;
 
         Ok(())
     }
@@ -127,11 +145,12 @@ pub struct LiquidityPool {
     pub ata_pool: Pubkey,
     pub ata_a: Pubkey,
     pub ata_b: Pubkey,
+    pub bump: u8,
 }
 
 impl LiquidityPool {
     pub fn get_size() -> usize {
-        32 + 32 + 32 + 32 + 32 + 32 + 32
+        32 + 32 + 32 + 32 + 32 + 32 + 32 + 1
     }
 }
 
@@ -155,6 +174,7 @@ pub struct CreateSolarpool<'info> {
 
 #[derive(Accounts)]
 pub struct Swap<'info> {
+    #[account(mut, seeds=[b"solarpool".as_ref(), pool.owner.as_ref()], bump=pool.bump)]
     pub pool: Account<'info, LiquidityPool>,
     #[account(mut)]
     pub pool_ata_source: Account<'info, TokenAccount>,

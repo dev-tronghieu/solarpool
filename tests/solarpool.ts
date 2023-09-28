@@ -17,6 +17,7 @@ describe("solarpool", async () => {
     const program = anchor.workspace.Solarpool as Program<Solarpool>;
 
     let solarPDA: anchor.web3.PublicKey;
+    let bump: number;
     let mintPool: anchor.web3.PublicKey;
     let mintA: anchor.web3.PublicKey;
     let mintB: anchor.web3.PublicKey;
@@ -27,6 +28,11 @@ describe("solarpool", async () => {
     const ammOwner = anchor.web3.Keypair.generate();
     const payer = anchor.web3.Keypair.generate();
     const tokenOwner = anchor.web3.Keypair.generate();
+
+    const getBalance = async (ata: anchor.web3.PublicKey) => {
+        return (await program.provider.connection.getTokenAccountBalance(ata))
+            .value.amount;
+    };
 
     it("Create Solarpool", async () => {
         // Setup
@@ -59,13 +65,13 @@ describe("solarpool", async () => {
             "singleGossip"
         );
 
-        solarPDA = anchor.web3.PublicKey.findProgramAddressSync(
+        [solarPDA, bump] = anchor.web3.PublicKey.findProgramAddressSync(
             [
                 anchor.utils.bytes.utf8.encode("solarpool"),
                 ammOwner.publicKey.toBuffer(),
             ],
             program.programId
-        )[0];
+        );
 
         // Create and mint tokens
         mintPool = await createMint(
@@ -136,7 +142,7 @@ describe("solarpool", async () => {
 
         // Create Solarpool
         await program.methods
-            .createSolarpool(mintPool, mintA, mintB)
+            .createSolarpool(bump, mintPool, mintA, mintB)
             .accounts({
                 ataPool: ataPool.address,
                 ataA: ataA.address,
@@ -150,17 +156,14 @@ describe("solarpool", async () => {
 
         // Check
         const solarpool = await program.account.liquidityPool.fetch(solarPDA);
+        console.log("--> Solarpool");
         console.log(
-            "--> Solarpool TokenA balance: ",
-            await program.provider.connection.getTokenAccountBalance(
-                solarpool.ataA
-            )
+            "- TokenA balance (Solarpool): ",
+            await getBalance(solarpool.ataA)
         );
         console.log(
-            "--> Solarpool TokenB balance: ",
-            await program.provider.connection.getTokenAccountBalance(
-                solarpool.ataB
-            )
+            "- TokenB balance (Solarpool): ",
+            await getBalance(solarpool.ataB)
         );
     });
 
@@ -209,6 +212,24 @@ describe("solarpool", async () => {
             true
         );
 
+        console.log("--> Before swap");
+        console.log(
+            "- Solarpool TokenA balance: ",
+            await getBalance(ataA.address)
+        );
+        console.log(
+            "- Solarpool TokenB balance: ",
+            await getBalance(ataB.address)
+        );
+        console.log(
+            "- User TokenA balance: ",
+            await getBalance(userAtaA.address)
+        );
+        console.log(
+            "- User TokenB balance: ",
+            await getBalance(userAtaB.address)
+        );
+
         // Swap
         await program.methods
             .swap(new anchor.BN(10))
@@ -226,11 +247,23 @@ describe("solarpool", async () => {
 
         // Check
         const solarpool = await program.account.liquidityPool.fetch(solarPDA);
+
+        console.log("--> After swap");
         console.log(
-            "--> Solarpool TokenA balance: ",
-            await program.provider.connection.getTokenAccountBalance(
-                solarpool.ataA
-            )
+            "- TokenA balance (Solarpool): ",
+            await getBalance(solarpool.ataA)
+        );
+        console.log(
+            "- TokenB balance (Solarpool): ",
+            await getBalance(solarpool.ataB)
+        );
+        console.log(
+            "- TokenA balance (User): ",
+            await getBalance(userAtaA.address)
+        );
+        console.log(
+            "- TokenB balance (User): ",
+            await getBalance(userAtaB.address)
         );
     });
 });
